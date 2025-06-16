@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "dev": "pnpm -r run dev"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ]
+}
