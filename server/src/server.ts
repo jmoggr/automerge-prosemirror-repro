@@ -23,6 +23,9 @@ const repo = new Repo({
   network: [new NodeWSServerAdapter(wss)],
 });
 const handle = repo.create();
+handle.change((d: any) => {
+  d.text = ""
+})
 
 app.get("/document-id", (_req, res) => {
   res.json({ documentId: handle.documentId });
