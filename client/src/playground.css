@@ -91,3 +91,7 @@ blockquote {
 .tab-content.active {
   display: block;
 }
+
+.ProseMirror {
+  border: 1px solid black;
+}

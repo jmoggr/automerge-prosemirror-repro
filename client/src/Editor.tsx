@@ -1,11 +1,14 @@
 // from: https://github.com/automerge/automerge-prosemirror/blob/main/playground/src/Editor.tsx
 
 import React, { useState, useRef, useLayoutEffect } from "react"
-import { Command, EditorState, Transaction } from "prosemirror-state"
+import { Command, EditorState, NodeSelection, Transaction } from "prosemirror-state"
 import { keymap } from "prosemirror-keymap"
 import {
     baseKeymap,
     chainCommands,
+    deleteSelection,
+    joinBackward,
+    selectNodeBackward,
     setBlockType,
     toggleMark,
     wrapIn,
@@ -54,6 +57,16 @@ import LinkForm from "./LinkForm.js"
 import Modal from "./Modal.js"
 import { SchemaAdapter, init } from "@automerge/prosemirror"
 
+import {
+    makeBlockMathInputRule,
+    makeInlineMathInputRule,
+    mathBackspaceCmd,
+    mathPlugin,
+    REGEX_BLOCK_MATH_DOLLARS,
+    REGEX_INLINE_MATH_DOLLARS
+} from "@benrbray/prosemirror-math";
+
+
 export type EditorProps = {
     name?: string
     handle: DocHandle<unknown>
@@ -73,36 +86,74 @@ function toggleMarkCommand(mark: MarkType): Command {
     }
 }
 
-function turnSelectionIntoBlockquote(
-    state: EditorState,
-    dispatch: (tr: Transaction) => void | undefined,
-    view: EditorView,
-): boolean {
-    // Check if the blockquote can be applied
-    const { $from, $to } = state.selection
-    const range = $from.blockRange($to)
+// Copied from: https://github.com/benrbray/prosemirror-math/blob/master/lib/commands/insert-math-cmd.ts
+export function insertMathInlineCmd(mathNodeType: NodeType, initialText = ""): Command {
+    return (state: EditorState, dispatch: ((tr: Transaction) => void) | undefined) => {
+        const { $from } = state.selection;
+        const index = $from.index();
+        if (!$from.parent.canReplaceWith(index, index, mathNodeType)) {
+            return false;
+        }
 
-    if (!range) {
-        return false
-    }
+        if (dispatch) {
+            const mathNode = mathNodeType.create(
+                {},
+                initialText ? state.schema.text(initialText) : null,
+            );
 
-    // Check if we can wrap the selection in a blockquote
-    if (!wrapIn(state.schema.nodes.blockquote)(state, undefined, view)) {
-        return false
-    }
+            let tr = state.tr.replaceSelectionWith(mathNode);
+            tr = tr.setSelection(NodeSelection.create(tr.doc, $from.pos));
 
-    // Apply the blockquote transformation
-    if (dispatch) {
-        wrapIn(state.schema.nodes.blockquote)(state, dispatch, view)
-    }
-    return true
+            dispatch(tr);
+        }
+
+        return true;
+    };
+}
+
+export function insertMathDisplayCmd(nodeType: NodeType, initialText = ""): Command {
+    return (state: EditorState, dispatch: ((tr: Transaction) => void) | undefined) => {
+        const { $from, $to } = state.selection;
+
+        if (!dispatch) {
+            return true;
+        }
+
+        // There is an idiomatic pattern at the start of commands inserting new nodes to check that the node can
+        // be inserted with canReplaceWith. In this case we skip the check because canReplaceWith will
+        // always (I think) fail when trying to put a block inside a paragraph.
+
+        const selectedText = state.doc.textBetween($from.pos, $to.pos, " ");
+        const initialTextContent = initialText || selectedText;
+        const initialContent = initialTextContent ? state.schema.text(initialTextContent) : null;
+
+        const mathNode = nodeType.create({}, initialContent);
+
+        let tr = state.tr;
+
+        // delete the selected text (it will be replaced with `initalContent`)
+        if ($from.pos !== $to.pos) {
+            tr = tr.delete($from.pos, $to.pos);
+        }
+
+        // if we're inside a paragraph, split the paragraph
+        if ($from.parent.type.name === "paragraph" && $from.parent.content.size !== 0) {
+            tr = tr.split($from.pos);
+        }
+
+        tr = tr.insert($from.pos, mathNode);
+        tr = tr.setSelection(NodeSelection.create(tr.doc, $from.pos + 1));
+
+        dispatch(tr);
+
+        return true;
+    };
 }
 
 export function Editor({ handle, path, schemaAdapter }: EditorProps) {
     const editorRoot = useRef<HTMLDivElement>(null)
     const [view, setView] = useState<EditorView | null>(null)
     const handleReady = useHandleReady(handle)
-    const [imageModalOpen, setImageModalOpen] = useState(false)
     const [linkModalOpen, setLinkModalOpen] = useState(false)
     const [{ boldActive, emActive }, setMarkState] = useState({
         boldActive: false,
@@ -119,23 +170,32 @@ export function Editor({ handle, path, schemaAdapter }: EditorProps) {
             pmDoc,
             plugin: syncPlugin,
         } = init(handle, path, { schemaAdapter })
+
+        let inlineMathInputRule = makeInlineMathInputRule(REGEX_INLINE_MATH_DOLLARS, schema.nodes.math_inline);
+        let blockMathInputRule = makeBlockMathInputRule(REGEX_BLOCK_MATH_DOLLARS, schema.nodes.math_display);
+
         const state = EditorState.create({
             schema,
             plugins: [
+                mathPlugin,
                 buildInputRules(schema),
                 history(),
                 keymap({ "Mod-z": undo, "Mod-y": redo, "Shift-Mod-z": redo }),
                 keymap({
-                    "Mod-b": toggleBold(schema),
+                    "Mod-m": insertMathInlineCmd(schema.nodes.math_inline),
+                    "Mod-b": insertMathDisplayCmd(schema.nodes.math_display, ""),
+                    // "Mod-b": toggleBold(schema),
                     "Mod-i": toggleItalic(schema),
                     "Mod-l": toggleMark(schema.marks.link, {
                         href: "https://example.com",
                         title: "example",
                     }),
                     Enter: splitListItem(schema.nodes.list_item),
+                    "Backspace": chainCommands(deleteSelection, mathBackspaceCmd, joinBackward, selectNodeBackward),
                 }),
                 keymap(buildKeymap(schema)),
                 keymap(baseKeymap),
+                inputRules({ rules: [inlineMathInputRule, blockMathInputRule] }),
                 syncPlugin,
             ],
             doc: pmDoc,

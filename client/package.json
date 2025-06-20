@@ -18,6 +18,8 @@
     "@automerge/automerge-repo-react-hooks": "^2.0.1",
     "@automerge/automerge-repo-storage-indexeddb": "^2.0.1",
     "@automerge/prosemirror": "^0.0.13",
+    "@benrbray/prosemirror-math": "^1.0.0",
+    "katex": "^0.16.22",
     "lucide-react": "^0.515.0",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-example-setup": "^1.2.3",
